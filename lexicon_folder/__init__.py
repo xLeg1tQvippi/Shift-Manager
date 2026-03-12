@@ -1,0 +1,1 @@
+from .lexicon import DB_DATA

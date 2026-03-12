@@ -1,0 +1,31 @@
+version: 1
+disable_existing_loggers: False
+
+formatters:
+  simple:
+    format: "%(asctime)s | [%(levelname)s] | %(lineno)d - [%(name)s] - %(message)s"
+    datefmt: "%H:%M:%S"
+
+handlers:
+  console_output:
+    class: logging.StreamHandler
+    formatter: simple
+    stream: ext://sys.stdout
+
+  file_writer:
+    class: logging.handlers.RotatingFileHandler
+    formatter: simple
+    filename: logging_data/app.log
+    maxBytes: 10485760
+    backupCount: 3
+
+  queue_handler:
+    class: logging.handlers.QueueHandler
+    handlers:
+      - console_output
+      - file_writer
+    respect_handler_level: True
+
+root:
+  level: ERROR
+  handlers: [queue_handler]
