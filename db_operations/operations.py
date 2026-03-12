@@ -162,13 +162,12 @@ class EmployeeDatabase(DataBaseOperations):
         try:
             cursor = await self.db.execute("""
                 SELECT e.last_name, e.first_name, e.middle_name, 
-                       se.job_place, se.start_time, se.shift_type
+                    se.job_place, se.start_time, se.shift_type
                 FROM schedule_employees se
                 JOIN employees e ON se.user_id = e.user_id
                 WHERE se.schedule_id = ?
-                -- Сначала сортируем по времени (06:00 будет раньше 20:00)
-                -- А затем внутри одного времени - по фамилии
-                ORDER BY se.start_time ASC, e.last_name ASC
+                -- ТЕПЕРЬ СОРТИРУЕМ ПО ТОМУ, ЧТО ТЫ ПЕРЕТАЩИЛ МЫШКОЙ
+                ORDER BY se.sort_order ASC 
             """, (schedule_id,))
             return await cursor.fetchall()
         except Exception as e:

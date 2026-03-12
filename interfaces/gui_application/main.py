@@ -290,41 +290,65 @@ class MainWindow(QMainWindow):
         temp_table.close()
         print("✅ Зеленая Excel-расстановка в буфере!")
 
-    @asyncSlot() # Делаем метод асинхронным, чтобы юзать await
+    def get_data_from_table(self):
+        """Собирает данные прямо из виджета таблицы в том порядке, который видит пользователь"""
+        report_data = []
+        for row in range(self.table_employees.rowCount()):
+            # Пропускаем скрытые строки (если включен фильтр)
+            if self.table_employees.isRowHidden(row):
+                continue
+                
+            name = self.table_employees.item(row, 0).text()
+            job = self.table_employees.item(row, 1).text()
+            time = self.table_employees.item(row, 2).text()
+            shift = self.table_employees.item(row, 3).text()
+            
+            # Сохраняем в виде словаря или кортежа, как тебе удобно для отчета
+            report_data.append({
+                'name': name,
+                'job_place': job,
+                'start_time': time,
+                'shift_type': shift
+            })
+        return report_data
+
+
+    @asyncSlot()
     async def copy_schedule_to_clipboard(self):
+        # 1. Проверяем, выбрано ли расписание
         current_item = self.list_schedules.currentItem()
-        if not current_item: return
-        data = current_item.data(Qt.ItemDataRole.UserRole)
-        
-        # 1. Тянем ПОЛНЫЕ данные из базы, а не из таблицы
-        employees = await self.employee_base.get_full_data_for_report(data['id'])
-        
-        shift_ru = "Дневная" if data['shift_type'] == "Day" else "Ночная"
-        
-        report = [
-            f"Дата: {data['date']} | Смена: {shift_ru}",
-            f"Участок: {data['name']}",
-            ""
-        ]
-        
-        # 2. Формируем список из данных БД
-        for i, emp in enumerate(employees):
-            # Собираем полное ФИО (или Фамилия И.)
-            full_name = self.get_short_name(emp=emp)
-            job = emp['job_place']
-            time = emp['start_time']
+        if not current_item: 
+            print("(!) Сначала выберите расписание")
+            return
             
-            job_text = f" ({job})" if job and job != "—" else ""
-            
-            # Теперь имя будет полным, как в базе!
-            report.append(f"{time} | {i + 1}. {full_name}{job_text}")
-            
-        report.append("")
-        report.append(f"✅ Всего: {len(employees)} чел.")
+        schedule_info = current_item.data(Qt.ItemDataRole.UserRole)
         
-        import pyperclip
-        pyperclip.copy("\n".join(report))
-        print("Полный текстовый отчет (из БД) скопирован! 📋🚀")
+        # 2. Собираем данные ПРЯМО ИЗ ТАБЛИЦЫ (как они стоят на экране)
+        report_lines = []
+        report_lines.append(f"📋 Расстановка: {schedule_info['name']} ({schedule_info['date']})")
+        report_lines.append("-" * 30)
+
+        for row in range(self.table_employees.rowCount()):
+            # Если хочешь копировать даже скрытые поиском строки — убирай проверку isRowHidden
+            # if self.table_employees.isRowHidden(row): continue 
+
+            name = self.table_employees.item(row, 0).text()
+            job = self.table_employees.item(row, 1).text()
+            time = self.table_employees.item(row, 2).text()
+            
+            # Формируем строку (например: 1. Аминева К. (Вакуум) - 08:00)
+            line = f"{row + 1}. {name} ({job}) - {time}"
+            report_lines.append(line)
+
+        # 3. Соединяем всё в один текст
+        final_text = "\n".join(report_lines)
+
+        # 4. Копируем в буфер обмена
+        clipboard = QApplication.clipboard()
+        clipboard.setText(final_text)
+        
+        print("✅ Данные скопированы в буфер обмена в текущем порядке!")
+
 
     def get_short_name(self, emp):
         
