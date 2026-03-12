@@ -10,10 +10,6 @@ import logging
 import json
 import dotenv, os
 
-
-with open("db/employee_names.json", 'r', encoding='utf-8') as file:
-    data: dict = json.load(file)
-
 async def main():
     setup_logging()
     logger = logging.getLogger(__name__)
