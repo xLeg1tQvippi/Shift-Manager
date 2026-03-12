@@ -1,5 +1,8 @@
-import sys
+import sys, os
 import asyncio
+
+os.environ["QT_QUICK_CONTROLS_STYLE"] = "Basic"
+
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QListWidget, QTableWidget, 
                              QTableWidgetItem, QPushButton, QLabel, QHeaderView, QListWidgetItem,
@@ -736,15 +739,27 @@ class MainWindow(QMainWindow):
 
     @asyncSlot()
     async def refresh_schedules(self):
+        # 1. ЗАПОМИНАЕМ ТЕКУЩИЙ ВЫБОР (перед очисткой)
+        selected_id = None
+        current_item = self.list_schedules.currentItem()
+        if current_item:
+            current_data = current_item.data(Qt.ItemDataRole.UserRole)
+            if current_data:
+                # Используем id расписания как уникальный маркер
+                selected_id = current_data.get('id') 
+
+        # 2. ОЧИЩАЕМ СПИСОК
         self.list_schedules.clear()
+        
+        # 3. ПОЛУЧАЕМ ДАННЫЕ
         schedules = await self.schedule_base.get_all_schedules_with_stats()
         
         import arrow
-        today = arrow.now().format('YYYY-MM-DD')
-        yesterday = arrow.now().shift(days=-1).format('YYYY-MM-DD')
-        tomorrow = arrow.now().shift(days=+1).format('YYYY-MM-DD')
+        now = arrow.now()
+        today = now.format('YYYY-MM-DD')
+        yesterday = now.shift(days=-1).format('YYYY-MM-DD')
+        tomorrow = now.shift(days=+1).format('YYYY-MM-DD')
 
-        # Группируем для вставки заголовков
         groups = {"Завтра": [], "Сегодня": [], "Вчера": [], "Ранее": []}
         
         for s in schedules:
@@ -753,28 +768,46 @@ class MainWindow(QMainWindow):
             elif s['date'] == yesterday: groups["Вчера"].append(s)
             else: groups["Ранее"].append(s)
 
+        # 4. ЗАПОЛНЯЕМ СПИСОК ЗАНОВО
         for label, items in groups.items():
-            if not items: continue
+            if not items: 
+                continue
             
-            # Создаем заголовок-разделитель
+            # Добавляем разделитель группы
             header = QListWidgetItem(f"--- {label} ---")
-            header.setFlags(Qt.ItemFlag.NoItemFlags) # Делаем его некликабельным
+            header.setFlags(Qt.ItemFlag.NoItemFlags) # Не кликабельно
             header.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             header.setForeground(Qt.GlobalColor.darkGray)
             self.list_schedules.addItem(header)
 
-            # Добавляем сами расписания
-            for s in items:
-            
-                shift_icon = ""
-                if s['shift_type'] == "Day": shift_icon = "(День)"
-                elif s['shift_type'] == "Night": shift_icon = "(Ночь)"
-                else: shift_icon = "(Смешанная)" # Для Mixed/Смешанной
-                text = f"{s['date'][8:]}.{s['date'][5:7]} | {s['name']} {shift_icon} [{s['emp_count']}]"
+            for row in items:
+                
+                s = dict(row)
+                # Формируем иконку смены
+                shift_type = s.get('shift_type')
+                if shift_type == "Day": 
+                    shift_icon = "(День)"
+                elif shift_type == "Night": 
+                    shift_icon = "(Ночь)"
+                else: 
+                    shift_icon = "(Смешанная)"
+                
+                # Текст элемента
+                date_str = f"{s['date'][8:]}.{s['date'][5:7]}"
+                text = f"{date_str} | {s['name']} {shift_icon} [{s['emp_count']}]"
                 
                 item = QListWidgetItem(text)
+                # Сохраняем все данные расписания в UserRole
                 item.setData(Qt.ItemDataRole.UserRole, dict(s))
                 self.list_schedules.addItem(item)
+
+                # 5. ВОССТАНАВЛИВАЕМ ВЫДЕЛЕНИЕ
+                # Если ID совпадает с тем, что был выбран до обновления
+                if selected_id and s.get('id') == selected_id:
+                    # Блокируем сигналы, если не хотим, чтобы on_schedule_selected вызвался дважды
+                    # self.list_schedules.blockSignals(True) 
+                    self.list_schedules.setCurrentItem(item)
+                    # self.list_schedules.blockSignals(False)
 
 
     # @asyncSlot()
@@ -1653,7 +1686,7 @@ class EmployeeEditDialog(QDialog):
         }
 
 async def main_gui(db: aiosqlite.Connection):
-    
+
     app = QApplication(sys.argv)
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)
