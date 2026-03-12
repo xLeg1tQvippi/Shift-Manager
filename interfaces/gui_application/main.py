@@ -4,8 +4,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QListWidget, QTableWidget, 
                              QTableWidgetItem, QPushButton, QLabel, QHeaderView, QListWidgetItem,
                              QDialog, QFormLayout, QLineEdit, QComboBox, QTimeEdit, QDialogButtonBox, QGridLayout, QFrame, QMenu,
-                             QDateEdit, QMessageBox, QDialog, QFormLayout, QLineEdit, QDialogButtonBox, QScrollArea, QCheckBox, 
-                             QAbstractItemView, QInputDialog)
+                             QDateEdit, QMessageBox, QDialog, QFormLayout, QLineEdit, QDialogButtonBox, QScrollArea, QCheckBox, QAbstractItemView)
 
 from PyQt6.QtCore import Qt, QTime, QDate, QTimer
 from PyQt6.QtGui import QAction, QCursor, QFont, QPixmap, QPainter, QColor, QPen
@@ -27,8 +26,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Shift Manager GUI")
         self.resize(1100, 700)
 
-        # --- Инициализация операций ---
-        self.logger = logging.getLogger(__name__)    
+        self.logger: logging = logging.getLogger(__name__)    
         self.employee_ops = EmployeeOperations(db=db)
         self.department_ops = DepartmentOperations(db=db)
         self.job_ops = JobPlaceOperations(db=db)
@@ -39,57 +37,33 @@ class MainWindow(QMainWindow):
         self.schedule_ops = ScheduleOperations(db=db)
         self.schedule_employees_ops = ScheduleEmployeesOperations(db=db)
         self.day_off_setter_base = DayOffSetterBase(db=db)
-        self.arrangement_creator = ArrangementCreator(
-            employee_ops=self.employee_ops, job_ops=self.job_ops, 
-            department_ops=self.department_ops, schedule_employees_base=self.schedule_employees_base, 
-            schedule_base=self.schedule_base, schedule_ops=self.schedule_ops, 
-            schedule_employees_ops=self.schedule_employees_ops, day_off_setter_base=self.day_off_setter_base
-        )
+        self.arrangement_creator = ArrangementCreator(employee_ops=self.employee_ops, job_ops=self.job_ops, department_ops=self.department_ops, schedule_employees_base=self.schedule_employees_base, schedule_base=self.schedule_base, schedule_ops=self.schedule_ops, schedule_employees_ops=self.schedule_employees_ops, day_off_setter_base=self.day_off_setter_base)
 
-        # --- ИНТЕРФЕЙС ---
+
+        # --- ИНТЕР%ЕЙС ---
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.main_layout = QHBoxLayout(self.central_widget)
 
-        # --- ЛЕВАЯ КОЛОНКА (Расписания) ---
+        # Левая колонка: Список расписаний
         self.left_layout = QVBoxLayout()
         self.label_schedules = QLabel("<b>📅 Доступные расписания</b>")
-        
         self.list_schedules = QListWidget()
         self.list_schedules.itemClicked.connect(self.on_schedule_selected)
-        self.list_schedules.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.list_schedules.customContextMenuRequested.connect(self.show_schedule_context_menu)
         
         self.btn_refresh = QPushButton("Обновить список")
         self.btn_refresh.clicked.connect(self.refresh_schedules)
         
-        self.btn_employees = QPushButton("База сотрудников")
-        self.btn_employees.clicked.connect(lambda: asyncio.create_task(self.open_employee_manager()))
-
         self.left_layout.addWidget(self.label_schedules)
         self.left_layout.addWidget(self.list_schedules)
         self.left_layout.addWidget(self.btn_refresh)
-        self.left_layout.addWidget(self.btn_employees)
 
-        # --- ПРАВАЯ КОЛОНКА (Сотрудники) ---
+        # Правая колонка: Список сотрудников
         self.right_layout = QVBoxLayout()
         self.label_title = QLabel("<b>👥 Состав участка</b>")
         
-        # Поиск (Фильтр)
-        self.name_filter = QLineEdit()
-        self.name_filter.setPlaceholderText("(Введите имя) Быстрый фильтр по имени...")
-        self.name_filter.setClearButtonEnabled(True)
-        self.name_filter.textChanged.connect(self.filter_employees)
-
-        # Таблица
         self.table_employees = QTableWidget()
-        self.table_employees.setColumnCount(5)
-        self.table_employees.setHorizontalHeaderLabels(["Сотрудник", "Позиция", "Время", "Смена", "ID"])
-        self.table_employees.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table_employees.setColumnHidden(3, True) 
-        self.table_employees.setColumnHidden(4, True)
         
-        # Настройки Drag & Drop
         self.table_employees.setDragEnabled(True)
         self.table_employees.setAcceptDrops(True)
         self.table_employees.setDragDropOverwriteMode(False)
@@ -98,15 +72,22 @@ class MainWindow(QMainWindow):
         self.table_employees.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.table_employees.setDefaultDropAction(Qt.DropAction.MoveAction)
         
-        # Сигналы таблицы
+        # Магия: когда строка перемещена, запускаем сохранение в БД
         self.table_employees.model().rowsMoved.connect(
             lambda: asyncio.create_task(self.save_new_order())
         )
+
         self.table_employees.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table_employees.customContextMenuRequested.connect(self.show_context_menu)
-        self.table_employees.horizontalHeader().sectionClicked.connect(self.handle_header_click)
 
-        # Кнопки действий под таблицей
+        self.table_employees.setColumnCount(5)
+        self.table_employees.setHorizontalHeaderLabels(["Сотрудник", "Позиция", "Время", "Смена", "ID"])
+
+        self.table_employees.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table_employees.setColumnHidden(3, True) 
+        self.table_employees.setColumnHidden(4, True)
+
+        # Кнопки действий
         self.actions_layout = QHBoxLayout()
         self.btn_add = QPushButton("(+) Добавить")
         self.btn_edit = QPushButton("(>) Изменить")
@@ -116,46 +97,37 @@ class MainWindow(QMainWindow):
         self.btn_add.clicked.connect(lambda: self.add_employee_to_current_schedule())
         self.btn_del.clicked.connect(lambda: asyncio.create_task(self.delete_current_schedule()))
         
+        self.btn_employees = QPushButton("База сотрудников")
+        self.btn_employees.clicked.connect(lambda: asyncio.create_task(self.open_employee_manager()))
+        self.left_layout.addWidget(self.btn_employees)
+        
+        self.list_schedules.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list_schedules.customContextMenuRequested.connect(self.show_schedule_context_menu)
+        
         self.actions_layout.addWidget(self.btn_add)
         self.actions_layout.addWidget(self.btn_edit)
         self.actions_layout.addWidget(self.btn_del)
 
-        # Кнопки отчетов
+        self.right_layout.addWidget(self.label_title)
+        self.right_layout.addWidget(self.table_employees)
+        self.right_layout.addLayout(self.actions_layout)
+
         self.report_layout = QHBoxLayout()
         self.btn_copy_text = QPushButton("Копировать текстом")
         self.btn_copy_img = QPushButton("Копировать фото")
+        
         self.btn_copy_text.clicked.connect(lambda: self.open_smart_report())
         self.btn_copy_img.clicked.connect(self.copy_as_excel_style_image)
+        
         self.report_layout.addWidget(self.btn_copy_text)
         self.report_layout.addWidget(self.btn_copy_img)
-
-        # Собираем правую колонку строго по порядку
-        self.right_layout.addWidget(self.label_title)
-        self.right_layout.addWidget(self.name_filter) # Фильтр сразу под заголовком
-        self.right_layout.addWidget(self.table_employees)
-        self.right_layout.addLayout(self.actions_layout)
+        
         self.right_layout.addLayout(self.report_layout)
 
-        # Добавляем колонки в главный слой
+
         self.main_layout.addLayout(self.left_layout, 1)
         self.main_layout.addLayout(self.right_layout, 2)
-        
-    def handle_header_click(self, index):
-        if index == 0:  # Если нажали на колонку "Сотрудник"
-            text, ok = QInputDialog.getText(self, "Поиск", "Введите имя сотрудника:")
-            if ok:
-                self.filter_employees(text)
 
-    def filter_employees(self, text):
-        is_filtering = len(text) > 0
-        self.table_employees.setDragEnabled(not is_filtering)
-        search_text = text.lower()
-        for row in range(self.table_employees.rowCount()):
-            item = self.table_employees.item(row, 0)
-            if item:
-                is_visible = search_text in item.text().lower()
-                self.table_employees.setRowHidden(row, not is_visible)
-        
     async def save_new_order(self):
         current = self.list_schedules.currentItem()
         if not current: return
@@ -1368,7 +1340,7 @@ class AddEmployeeDialog(QDialog):
                 # --- НОВАЯ ЛОГИКА: ПРОВЕРКА НА ТЕКУЩИЙ УЧАСТОК ---
                 if user_id in self.current_ids:
                     status_text = "Уже на участке"
-                    color = Qt.GlobalColor.darkCyan # Голубой или бирюзовый
+                    color = Qt.GlobalColor.cyan # Голубой или бирюзовый
                 
                 # --- ЛОГИКА ЗАНЯТОСТИ НА ДРУГИХ УЧАСТКАХ ---
                 elif e.get('current_dept'):
@@ -1489,6 +1461,8 @@ class JobPositionsEditorDialog(QDialog):
             await self.job_ops.delete_job_position(department_id=self.dept_id, job_name=job_name)
             await self.load_jobs()
 
+
+
 class ScheduleDialog(QDialog):
     def __init__(self, departments, current_data=None, parent=None):
         super().__init__(parent)
@@ -1537,6 +1511,7 @@ class ScheduleDialog(QDialog):
             "time": self.time_edit.time().toString("H:mm")
         }
 
+
 class EmployeeCardDialog(QDialog):
     def __init__(self, emp_data, stats, available_jobs, parent=None):
         super().__init__(parent)
@@ -1577,17 +1552,22 @@ class EmployeeCardDialog(QDialog):
         if emp_data.get('shift_type'):
             self.combo_shift.setCurrentText(emp_data['shift_type'])
         
+        # Поле "Рабочее место"
         self.combo_job = QComboBox()
+        # Добавляем прочерк ПЕРВЫМ в список
         jobs_with_null = ["—"] + (available_jobs if available_jobs else [])
         self.combo_job.addItems(jobs_with_null)
         
+        # Установка текущей позиции (если в базе пусто или прочерк - ставим "—")
         current_job = emp_data.get('job')
         if current_job and current_job in jobs_with_null:
             self.combo_job.setCurrentText(current_job)
         else:
             self.combo_job.setCurrentText("—")
         
+        # Поле "Время"
         self.time_edit = QTimeEdit()
+        # Защита на случай, если время пришло в кривом формате
         try:
             h, m = map(int, emp_data['time'].split(':'))
             self.time_edit.setTime(QTime(h, m))
