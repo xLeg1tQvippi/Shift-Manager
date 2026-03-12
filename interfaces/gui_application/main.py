@@ -29,6 +29,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Shift Manager GUI")
         self.resize(1100, 700)
 
+        # --- ИНИЦИАЛИЗАЦИЯ ОПЕРАЦИЙ ---
         self.logger: logging = logging.getLogger(__name__)    
         self.employee_ops = EmployeeOperations(db=db)
         self.department_ops = DepartmentOperations(db=db)
@@ -40,32 +41,55 @@ class MainWindow(QMainWindow):
         self.schedule_ops = ScheduleOperations(db=db)
         self.schedule_employees_ops = ScheduleEmployeesOperations(db=db)
         self.day_off_setter_base = DayOffSetterBase(db=db)
-        self.arrangement_creator = ArrangementCreator(employee_ops=self.employee_ops, job_ops=self.job_ops, department_ops=self.department_ops, schedule_employees_base=self.schedule_employees_base, schedule_base=self.schedule_base, schedule_ops=self.schedule_ops, schedule_employees_ops=self.schedule_employees_ops, day_off_setter_base=self.day_off_setter_base)
+        self.arrangement_creator = ArrangementCreator(
+            employee_ops=self.employee_ops, job_ops=self.job_ops, 
+            department_ops=self.department_ops, schedule_employees_base=self.schedule_employees_base, 
+            schedule_base=self.schedule_base, schedule_ops=self.schedule_ops, 
+            schedule_employees_ops=self.schedule_employees_ops, day_off_setter_base=self.day_off_setter_base
+        )
 
-
-        # --- ИНТЕР%ЕЙС ---
+        # --- ИНТЕРФЕЙС ---
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.main_layout = QHBoxLayout(self.central_widget)
 
-        # Левая колонка: Список расписаний
+        # --- ЛЕВАЯ КОЛОНКА: Расписания ---
         self.left_layout = QVBoxLayout()
         self.label_schedules = QLabel("<b>📅 Доступные расписания</b>")
+        
         self.list_schedules = QListWidget()
         self.list_schedules.itemClicked.connect(self.on_schedule_selected)
+        self.list_schedules.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list_schedules.customContextMenuRequested.connect(self.show_schedule_context_menu)
         
         self.btn_refresh = QPushButton("Обновить список")
         self.btn_refresh.clicked.connect(self.refresh_schedules)
         
+        self.btn_employees = QPushButton("База сотрудников")
+        self.btn_employees.clicked.connect(lambda: asyncio.create_task(self.open_employee_manager()))
+        
         self.left_layout.addWidget(self.label_schedules)
         self.left_layout.addWidget(self.list_schedules)
         self.left_layout.addWidget(self.btn_refresh)
+        self.left_layout.addWidget(self.btn_employees)
 
-        # Правая колонка: Список сотрудников
+        # --- ПРАВАЯ КОЛОНКА: Состав участка ---
         self.right_layout = QVBoxLayout()
         self.label_title = QLabel("<b>👥 Состав участка</b>")
-        
+
+        # 1. Поле поиска (фильтр таблицы)
+        self.name_filter = QLineEdit()
+        self.name_filter.setPlaceholderText("🔍 Поиск по списку участка...")
+        self.name_filter.setClearButtonEnabled(True)
+        self.name_filter.textChanged.connect(self.filter_employees_in_table)
+
+        # 2. Таблица сотрудников
         self.table_employees = QTableWidget()
+        self.table_employees.setColumnCount(5)
+        self.table_employees.setHorizontalHeaderLabels(["Сотрудник", "Позиция", "Время", "Смена", "ID"])
+        self.table_employees.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table_employees.setColumnHidden(3, True) 
+        self.table_employees.setColumnHidden(4, True)
         
         self.table_employees.setDragEnabled(True)
         self.table_employees.setAcceptDrops(True)
@@ -75,22 +99,23 @@ class MainWindow(QMainWindow):
         self.table_employees.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.table_employees.setDefaultDropAction(Qt.DropAction.MoveAction)
         
-        # Магия: когда строка перемещена, запускаем сохранение в БД
         self.table_employees.model().rowsMoved.connect(
             lambda: asyncio.create_task(self.save_new_order())
         )
-
         self.table_employees.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table_employees.customContextMenuRequested.connect(self.show_context_menu)
 
-        self.table_employees.setColumnCount(5)
-        self.table_employees.setHorizontalHeaderLabels(["Сотрудник", "Позиция", "Время", "Смена", "ID"])
+        # --- СБОРКА ПРАВОЙ КОЛОНКИ ---
+        self.right_layout.addWidget(self.label_title)
+        self.right_layout.addWidget(self.name_filter)
+        self.right_layout.addWidget(self.table_employees)
 
-        self.table_employees.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table_employees.setColumnHidden(3, True) 
-        self.table_employees.setColumnHidden(4, True)
+        # Установка растяжения, чтобы таблица была большой, а поиск узким
+        self.right_layout.setStretch(0, 0) # Заголовок
+        self.right_layout.setStretch(1, 0) # Поиск
+        self.right_layout.setStretch(2, 1) # Таблица (забирает всё место)
 
-        # Кнопки действий
+        # 3. Кнопки действий (Добавить, Изменить, Удалить)
         self.actions_layout = QHBoxLayout()
         self.btn_add = QPushButton("(+) Добавить")
         self.btn_edit = QPushButton("(>) Изменить")
@@ -100,36 +125,41 @@ class MainWindow(QMainWindow):
         self.btn_add.clicked.connect(lambda: self.add_employee_to_current_schedule())
         self.btn_del.clicked.connect(lambda: asyncio.create_task(self.delete_current_schedule()))
         
-        self.btn_employees = QPushButton("База сотрудников")
-        self.btn_employees.clicked.connect(lambda: asyncio.create_task(self.open_employee_manager()))
-        self.left_layout.addWidget(self.btn_employees)
-        
-        self.list_schedules.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.list_schedules.customContextMenuRequested.connect(self.show_schedule_context_menu)
-        
         self.actions_layout.addWidget(self.btn_add)
         self.actions_layout.addWidget(self.btn_edit)
         self.actions_layout.addWidget(self.btn_del)
-
-        self.right_layout.addWidget(self.label_title)
-        self.right_layout.addWidget(self.table_employees)
         self.right_layout.addLayout(self.actions_layout)
 
+        # 4. Кнопки отчетов (Копировать)
         self.report_layout = QHBoxLayout()
         self.btn_copy_text = QPushButton("Копировать текстом")
         self.btn_copy_img = QPushButton("Копировать фото")
-        
         self.btn_copy_text.clicked.connect(lambda: self.open_smart_report())
         self.btn_copy_img.clicked.connect(self.copy_as_excel_style_image)
-        
         self.report_layout.addWidget(self.btn_copy_text)
         self.report_layout.addWidget(self.btn_copy_img)
-        
         self.right_layout.addLayout(self.report_layout)
 
-
+        # --- ОБЪЕДИНЕНИЕ КОЛОНОК ---
         self.main_layout.addLayout(self.left_layout, 1)
-        self.main_layout.addLayout(self.right_layout, 2)
+        self.main_layout.addLayout(self.right_layout, 3) # Правая колонка в 3 раза шире левой
+
+    # Не забудь добавить этот метод в класс, чтобы поиск работал:
+
+    def filter_employees_in_table(self, text):
+        search_text = text.lower().strip()
+        
+        # Отключаем Drag&Drop при поиске, чтобы случайно не перемешать скрытые строки
+        self.table_employees.setDragEnabled(not bool(search_text))
+
+        for row in range(self.table_employees.rowCount()):
+            # Индекс 0 — это колонка "Сотрудник"
+            item = self.table_employees.item(row, 0)
+            if item:
+                # Если текст поиска есть в имени — показываем строку, иначе скрываем
+                is_match = search_text in item.text().lower()
+                self.table_employees.setRowHidden(row, not is_match)
+
 
     async def save_new_order(self):
         current = self.list_schedules.currentItem()
@@ -573,29 +603,27 @@ class MainWindow(QMainWindow):
 
         menu = QMenu(self)
 
+        # Создаем действия
         action_edit = QAction("(>) Открыть карточку (Изменить)", self)
         action_day_off = QAction("(*) Отправить на выходной", self)
         action_replace = QAction("(*) Заменить сотрудника", self)
         action_remove = QAction("(x) Убрать из списка", self)
 
+        # Подключаем их (здесь это нормально, так как menu локальное и удалится)
         action_edit.triggered.connect(lambda: asyncio.create_task(self.edit_selected_employee()))
-        
-        self.btn_add.setCheckable(False)
-        self.btn_add.setAutoDefault(False)
-
-        self.btn_add.clicked.connect(lambda: self.add_employee_to_current_schedule())
-        
         action_day_off.triggered.connect(lambda: asyncio.create_task(self.quick_day_off()))
         action_remove.triggered.connect(lambda: asyncio.create_task(self.quick_remove()))
         action_replace.triggered.connect(lambda: asyncio.create_task(self.replace_employee_gui()))
 
+        # Добавляем в меню
         menu.addAction(action_edit)
         menu.addSeparator()
         menu.addAction(action_day_off)
         menu.addAction(action_replace)
         menu.addAction(action_remove)
 
-        menu.exec(QCursor.pos())
+        # Показываем
+        menu.exec(self.table_employees.viewport().mapToGlobal(position))
 
     async def quick_remove(self):
         selected = self.table_employees.selectedItems()
@@ -636,105 +664,110 @@ class MainWindow(QMainWindow):
     # @asyncSlot()
     @asyncSlot()
     async def add_employee_to_current_schedule(self):
-        print('>>> Нажата кнопка "Добавить"') 
+        # 1. Замок от повторных нажатий
+        if not self.btn_add.isEnabled(): 
+            return 
         
         current_item = self.list_schedules.currentItem()
         if not current_item:
             print("(!) Ошибка: Сначала выберите расписание!")
             return
 
-        if not self.btn_add.isEnabled(): return 
-            
         self.btn_add.setEnabled(False) 
+        print('>>> Начало процесса добавления')
 
         try:
-            schedule_data = current_item.data(Qt.ItemDataRole.UserRole)
-            
-            # 1. Загружаем данные для диалога выбора
-            all_employees_data = await self.employee_base.get_employees_with_location(schedule_data['date'])
-            current_employees = await self.schedule_employees_base.get_all_employees_by_schedule(schedule_data['id'])
-            current_ids = [emp['user_id'] for emp in current_employees]
-
-            # 2. Открываем диалог выбора
-            dialog = AddEmployeeDialog(all_employees_data, current_ids, self)
-            result = dialog.exec()
-
-            # --- СЦЕНАРИЙ А: БЫСТРОЕ СОЗДАНИЕ НОВОГО (Код 777) ---
-            if result == 777:
-                new_emp_data = dialog.new_emp_data # Данные из EmployeeNameDialog
-                # Здесь await работает идеально, т.к. exec() уже закрыт
-                new_id = await self.employee_base.add_user(
-                    new_emp_data['fn'], new_emp_data['ln'], new_emp_data['mn']
-                )
-                if new_id:
-                    await self.day_off_setter_base.init_employee_stats(new_id)
-                    print(f"✅ Сотрудник {new_emp_data['ln']} создан. Перезапускаем выбор...")
-                    # Рекурсивно вызываем этот же метод, чтобы сразу увидеть новичка в списке
-                    self.btn_add.setEnabled(True)
-                    await self.add_employee_to_current_schedule()
-                return
-
-            # --- СЦЕНАРИЙ Б: ОБЫЧНЫЙ ВЫБОР ---
-            if result == QDialog.DialogCode.Accepted:
-                name, eid = dialog.get_selected()
+            # Цикл нужен, чтобы при создании нового сотрудника (777) диалог выбора открывался снова
+            while True:
+                schedule_data = current_item.data(Qt.ItemDataRole.UserRole)
                 
-                if name and eid:
-                    # Проверка на перенос с другого участка
-                    if "📍 Занят:" in name:
-                        from PyQt6.QtWidgets import QMessageBox
-                        clean_name = name.split('|')[0].strip()
-                        
-                        reply = QMessageBox.question(
-                            self, "Перенос сотрудника",
-                            f"Сотрудник {clean_name} уже стоит на другом участке сегодня.\n"
-                            "Убрать его оттуда и назначить сюда?",
-                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                        )
-                        
-                        if reply == QMessageBox.StandardButton.Yes:
-                            await self.schedule_employees_base.remove_from_all_schedules_on_date(eid, schedule_data['date'])
-                        else:
-                            return 
+                # Загружаем данные
+                all_employees_data = await self.employee_base.get_employees_with_location(schedule_data['date'])
+                current_employees = await self.schedule_employees_base.get_all_employees_by_schedule(schedule_data['id'])
+                current_ids = [emp['user_id'] for emp in current_employees]
 
-                    # Формируем данные для карточки (берем дефолты из расстановки)
-                    emp_data = {
-                        "id": eid, 
-                        "name": name.split('|')[0].strip(),
-                        "job": "—", 
-                        "time": schedule_data['start_time'],
-                        "shift_type": schedule_data['shift_type'] if schedule_data['shift_type'] != "Mixed" else "Day"
-                    }
-                    
-                    stats = await self.day_off_setter_base.get_employee_stats(eid)
-                    available_jobs = await self.job_ops.create_job_position_dict(schedule_data['department_id'])
-                    
-                    # Открываем карточку для финальной настройки места и времени
-                    card = EmployeeCardDialog(emp_data, stats, available_jobs, self)
-                    if card.exec():
-                        final_data = card.get_data()
-                        
-                        # Сохраняем финальный результат
-                        await self.schedule_employees_base.add_employee_to_schedule(
-                            schedule_id=schedule_data['id'],
-                            user_id=eid,
-                            job_place=final_data['job'],
-                            start_time=final_data['time'],
-                            date=schedule_data['date'],
-                            dept_name=schedule_data['name'],
-                            shift_type=final_data['shift']
-                        )
+                # Открываем диалог выбора
+                dialog = AddEmployeeDialog(all_employees_data, current_ids, self)
+                result = dialog.exec()
 
-                        await self.day_off_setter_base.increment_work_streak(eid, schedule_data['date'])
-                        # Обновляем интерфейс (таблицу и счетчик в списке слева)
-                        await self.on_schedule_selected(current_item)
-                        await self.refresh_schedules() # Чтобы обновилось кол-во людей в списке
+                # --- СЦЕНАРИЙ А: СОЗДАНИЕ НОВОГО (777) ---
+                if result == 777:
+                    new_emp_data = dialog.new_emp_data
+                    new_id = await self.employee_base.add_user(
+                        new_emp_data['fn'], new_emp_data['ln'], new_emp_data['mn']
+                    )
+                    if new_id:
+                        await self.day_off_setter_base.init_employee_stats(new_id)
+                        print(f"✅ Сотрудник {new_emp_data['ln']} создан. Возврат к выбору...")
+                        continue # Возвращаемся в начало цикла while, чтобы снова открыть выбор уже с новым сотрудником
+                    break # Если не удалось создать, выходим
+
+                # --- СЦЕНАРИЙ Б: ОТМЕНА ---
+                if result != QDialog.DialogCode.Accepted:
+                    break
+
+                # --- СЦЕНАРИЙ В: ОБЫЧНЫЙ ВЫБОР ---
+                name, eid = dialog.get_selected()
+                if not (name and eid):
+                    break
+
+                # Проверка на занятость на другом участке
+                if "📍 Занят:" in name:
+                    from PyQt6.QtWidgets import QMessageBox
+                    clean_name = name.split('|')[0].strip()
+                    reply = QMessageBox.question(
+                        self, "Перенос сотрудника",
+                        f"Сотрудник {clean_name} уже стоит на другом участке.\nПеренести сюда?",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                    )
+                    if reply == QMessageBox.StandardButton.Yes:
+                        await self.schedule_employees_base.remove_from_all_schedules_on_date(eid, schedule_data['date'])
+                    else:
+                        break # Пользователь отказался
+
+                # Подготовка данных для карточки
+                emp_data = {
+                    "id": eid, 
+                    "name": name.split('|')[0].strip(),
+                    "job": "—", 
+                    "time": schedule_data['start_time'],
+                    "shift_type": schedule_data['shift_type'] if schedule_data['shift_type'] != "Mixed" else "Day"
+                }
+                
+                stats = await self.day_off_setter_base.get_employee_stats(eid)
+                available_jobs = await self.job_ops.create_job_position_dict(schedule_data['department_id'])
+                
+                # Финальная настройка в карточке
+                card = EmployeeCardDialog(emp_data, stats, available_jobs, self)
+                if card.exec():
+                    final_data = card.get_data()
+                    
+                    await self.schedule_employees_base.add_employee_to_schedule(
+                        schedule_id=schedule_data['id'],
+                        user_id=eid,
+                        job_place=final_data['job'],
+                        start_time=final_data['time'],
+                        date=schedule_data['date'],
+                        dept_name=schedule_data['name'],
+                        shift_type=final_data['shift']
+                    )
+
+                    await self.day_off_setter_base.increment_work_streak(eid, schedule_data['date'])
+                    
+                    # ОБНОВЛЕНИЕ GUI
+                    # Важно: вызываем последовательно, чтобы избежать конфликтов индексов
+                    await self.on_schedule_selected(current_item)
+                    await self.refresh_schedules()
+                
+                break # Выходим из while после успешного завершения
 
         except Exception as error:
-            print(f"Критическая ошибка в цикле добавления: {error}")
+            print(f"Критическая ошибка: {error}")
             import traceback
             traceback.print_exc()
         finally:
             self.btn_add.setEnabled(True)
+            print('>>> Кнопка "Добавить" снова активна')
 
 
     @asyncSlot()
@@ -1293,32 +1326,33 @@ class AddEmployeeDialog(QDialog):
     def __init__(self, all_employees_data, current_emp_ids, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Добавить сотрудника на участок")
-        self.resize(500, 500)
+        self.resize(500, 600)
         
         self.all_emps = all_employees_data
         self.current_ids = current_emp_ids
+        self.new_emp_data = None 
 
         layout = QVBoxLayout(self)
-        
-        # В __init__ класса AddEmployeeDialog:
-        self.btn_quick_add = QPushButton("Добавить нового сотрудника")
-        self.btn_quick_add.clicked.connect(self.quick_add_employee)
-        layout.insertWidget(2, self.btn_quick_add) # Вставляем под строкой поиска
 
-        
-
-        layout.addWidget(QLabel("<b>Введите имя для поиска:</b>"))
+        # 1. ПОИСК (Оставляем, раз он нужен)
+        layout.addWidget(QLabel("<b>🔍 Поиск по фамилии:</b>"))
         self.search_field = QLineEdit()
-        self.search_field.setPlaceholderText("Начните вводить фамилию...")
-        self.search_field.textChanged.connect(self.filter_list)
+        self.search_field.setPlaceholderText("Начните вводить...")
+        self.search_field.textChanged.connect(self.filter_list) # Привязываем поиск
         layout.addWidget(self.search_field)
 
+        # 2. СПИСОК (Создаем только ОДИН раз)
         self.list_widget = QListWidget()
         self.list_widget.itemDoubleClicked.connect(self.accept)
         self.list_widget.setFont(QFont("Courier New", 10))
-
         layout.addWidget(self.list_widget)
 
+        # 3. КНОПКА БЫСТРОГО ДОБАВЛЕНИЯ
+        self.btn_quick_add = QPushButton("(+) Создать нового сотрудника в базе")
+        self.btn_quick_add.clicked.connect(self.quick_add_employee)
+        layout.addWidget(self.btn_quick_add)
+
+        # 4. КНОПКИ ОК/ОТМЕНА
         btns = QHBoxLayout()
         self.btn_ok = QPushButton("Добавить")
         self.btn_ok.clicked.connect(self.accept)
@@ -1328,104 +1362,92 @@ class AddEmployeeDialog(QDialog):
         btns.addWidget(self.btn_cancel)
         layout.addLayout(btns)
 
+        # Запускаем первичную отрисовку списка
         self.filter_list()
 
-    def quick_add_employee(self):
-        # 1. Открываем ввод ФИО (это обычный диалог, он не ломает цикл)
-        dialog = EmployeeNameDialog(parent=self)
-        if dialog.exec():
-            self.new_emp_data = dialog.get_data() # Сохраняем данные во временную переменную
-            if self.new_emp_data['ln']:
-                self.done(777) # Закрываем окно выбора с особым кодом 777
-
     def get_short_name(self, emp):
-        
-        emp = dict(emp) if not isinstance(emp, dict) else emp
-        
-        last = emp.get('last_name') or ""
-        first = emp.get('first_name') or ""
-        middle = emp.get('middle_name') or ""
-
-        name_parts = [last]
+        e = dict(emp) if not isinstance(emp, dict) else emp
+        last = e.get('last_name') or e.get('ln') or ""
+        first = e.get('first_name') or e.get('fn') or ""
+        middle = e.get('middle_name') or e.get('mn') or ""
         
         if len(last + first + middle) <= 12:
-            return " ".join([last, first, middle])
+            return f"{last} {first} {middle}".strip()
         
-        if first:
-            name_parts.append(f"{first[0]}.")
-            
-        if middle:
-            name_parts.append(f"{middle[0]}.")
-            
-        return " ".join(name_parts).strip()
-
+        res = last
+        if first: res += f" {first[0]}."
+        if middle: res += f" {middle[0]}."
+        return res
 
     def filter_list(self):
+        """Метод поиска и отрисовки списка"""
         search_text = self.search_field.text().lower()
         self.list_widget.clear()
 
         for emp in self.all_emps:
             e = dict(emp)
-            user_id = e['user_id']
-            short_name = self.get_short_name(emp)
+            user_id = e.get('user_id') or e.get('id')
+            short_name = self.get_short_name(e)
             
-            if search_text in short_name.lower():
-                # --- НОВАЯ ЛОГИКА: ПРОВЕРКА НА ТЕКУЩИЙ УЧАСТОК ---
-                if user_id in self.current_ids:
-                    status_text = "Уже на участке"
-                    color = Qt.GlobalColor.cyan # Голубой или бирюзовый
-                
-                # --- ЛОГИКА ЗАНЯТОСТИ НА ДРУГИХ УЧАСТКАХ ---
-                elif e.get('current_dept'):
-                    status_text = f"Занят: {e['current_dept']}"
-                    color = Qt.GlobalColor.red
-                
-                # --- ОБЫЧНЫЕ СТАТУСЫ ---
-                else:
-                    status = e.get('status')
-                    last_act = e.get('last_activity')
-                    streak = e.get('work_streak') or 0
-                    
-                    if status == 'Working':
-                        status_text = f"Работает: {streak} дн"
-                        color = Qt.GlobalColor.green
-                    elif status == 'Day Off' and last_act:
-                        try:
-                            days = (arrow.now() - arrow.get(last_act)).days
-                            status_text = f"Выходной: {days} дн"
-                            color = Qt.GlobalColor.yellow
-                        except:
-                            status_text = "Нет данных"
-                            color = Qt.GlobalColor.white
-                    else:
-                        status_text = "Нет данных"
+            # Если ввели текст, проверяем совпадение
+            if search_text and search_text not in short_name.lower():
+                continue
+
+            # Логика определения статуса и цвета
+            if user_id in self.current_ids:
+                status_text = "Уже на участке"
+                color = Qt.GlobalColor.cyan
+            elif e.get('current_dept'):
+                status_text = f"Занят: {e['current_dept']}"
+                color = Qt.GlobalColor.red
+            else:
+                status = e.get('status')
+                streak = e.get('work_streak') or 0
+                if status == 'Working':
+                    status_text = f"Работает: {streak} дн"
+                    color = Qt.GlobalColor.green
+                elif status == 'Day Off' and e.get('last_activity'):
+                    try:
+                        days = (arrow.now() - arrow.get(e['last_activity'])).days
+                        status_text = f"Выходной: {days} дн"
+                        color = Qt.GlobalColor.yellow
+                    except:
+                        status_text = "Выходной"
                         color = Qt.GlobalColor.white
+                else:
+                    status_text = "Свободен"
+                    color = Qt.GlobalColor.white
 
-                display_text = f"{short_name:<20} | {status_text}"
-                
-                item = QListWidgetItem(display_text)
-                item.setData(Qt.ItemDataRole.UserRole, user_id)
-                item.setForeground(color) 
-                
-                # Если он уже на участке, можно сделать его полупрозрачным или просто пометить
-                if user_id in self.current_ids:
-                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled) # Делаем некликабельным
-                
-                self.list_widget.addItem(item)
-
-
+            display_text = f"{short_name:<20} | {status_text}"
+            item = QListWidgetItem(display_text)
+            item.setData(Qt.ItemDataRole.UserRole, user_id)
+            item.setForeground(color) 
+            
+            # Делаем некликабельным, если уже на участке
+            if user_id in self.current_ids:
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+            
+            self.list_widget.addItem(item)
 
     def get_selected(self):
-        """Возвращает чистое имя и ID выбранного сотрудника"""
         item = self.list_widget.currentItem()
         if item:
             user_id = item.data(Qt.ItemDataRole.UserRole)
             for emp in self.all_emps:
-                if emp['user_id'] == user_id:
-                    clean_name = self.get_short_name(emp)
-                    return clean_name, user_id
+                emp = dict(emp)
+                e_id = emp.get('user_id') or emp.get('id')
+                if e_id == user_id:
+                    return self.get_short_name(emp), user_id
         return None, None
 
+    def quick_add_employee(self):
+        # Здесь вызывай свой EmployeeNameDialog
+        dialog = EmployeeNameDialog(parent=self)
+        if dialog.exec():
+            self.new_emp_data = dialog.get_data()
+            if self.new_emp_data.get('ln'):
+                self.done(777)
+                
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QListWidget, 
                              QLineEdit, QPushButton, QLabel, QMessageBox)
 
