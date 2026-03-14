@@ -1,5 +1,9 @@
 import sys, os
 import asyncio
+import pandas as pd
+import re
+
+from typing import Union
 
 os.environ["QT_QUICK_CONTROLS_STYLE"] = "Basic"
 
@@ -15,6 +19,7 @@ from qasync import QEventLoop, asyncSlot
 import aiosqlite
 import arrow
 
+from lexicon_folder import lexicon
 from helping_tools import HelpingTools
 import logging
 from db_operations.operations import EmployeeDatabase, DepartmentBase, JobBase, DataBaseOperations, ScheduleBase, ScheduleEmployeesBase, DayOffSetterBase
@@ -132,7 +137,7 @@ class MainWindow(QMainWindow):
 
         # 4. Кнопки отчетов (Копировать)
         self.report_layout = QHBoxLayout()
-        self.btn_copy_text = QPushButton("Копировать текстом")
+        self.btn_copy_text = QPushButton("Копировать (Текст/Excel)")
         self.btn_copy_img = QPushButton("Копировать фото")
         self.btn_copy_text.clicked.connect(lambda: self.open_smart_report())
         self.btn_copy_img.clicked.connect(self.copy_as_excel_style_image)
@@ -312,6 +317,100 @@ class MainWindow(QMainWindow):
             })
         return report_data
 
+    async def export_to_excel_side_by_side(self, selected_schedules):
+        import pandas as pd
+        from openpyxl.styles import Font, Alignment
+
+        final_data = {}
+        max_rows = 0
+        
+        # 1. Собираем данные и находим самую длинную колонку
+        temp_storage = []
+        for s in selected_schedules:
+            s_dict = dict(s) if not isinstance(s, dict) else s
+            # Тянем сотрудников (уже отсортированных по sort_order в БД)
+            employees = await self.employee_base.get_full_data_for_report(s_dict['id'])
+            temp_storage.append((s_dict, employees))
+            max_rows = max(max_rows, len(employees))
+
+        # 2. Формируем колонки для каждого участка "плечом к плечу"
+        for s, employees in temp_storage:
+            print(dict(s).items())
+            name_val = s.get('name') or s.get('dept_name') or "Участок"
+            shift_val = "День" if s.get('shift_type') == "Day" else "Ночь" if s.get('shift_type') == "Night" else "—"
+            time_val = s.get('start_time') or s.get('time') or "—"
+            
+            shift_header = f"{name_val} ({shift_val})"
+            time_header = f"Выход с: {time_val}"
+            
+            # Создаем пустые списки высотой: заголовок(1) + время(1) + макс. сотрудников
+            names_col = [""] * (max_rows + 2) 
+            jobs_col = [""] * (max_rows + 2)
+            
+            # Заполняем шапку
+            names_col[0] = shift_header
+            names_col[1] = time_header
+            
+            # Заполняем сотрудников
+            for i, emp in enumerate(employees):
+                e_dict = dict(emp) if not isinstance(emp, dict) else emp
+                short_name = self.get_short_name(e_dict)
+                
+                names_col[i+2] = f"{i+1}. {short_name}"
+                jobs_col[i+2] = e_dict.get('job_place') or e_dict.get('job') or "—"
+                
+            # Генерируем уникальный ключ для DataFrame, чтобы колонки не слиплись
+            u_key = f"{s.get('id')}_{name_val}"
+            final_data[f"{u_key}_Имя"] = names_col
+            final_data[f"{u_key}_Поз"] = jobs_col
+
+        report_date = selected_schedules[0].get('date') if selected_schedules else "отчет"
+        
+        if len(selected_schedules) == 1:
+            # Если один участок: "Колбасный (Day) 2026-03-14.xlsx"
+            s = selected_schedules[0]
+            base_name = f"{s['name']} ({s['shift_type']}) {report_date}"
+        else:
+            # Если много: "Сводный отчет (3 уч) 2026-03-14.xlsx"
+            base_name = f"Сводный отчет ({len(selected_schedules)} уч) {report_date}"
+
+        safe_name = re.sub(r'[/*?:"<>|]', "", base_name) + ".xlsx"
+        
+        folder = str(lexicon.EXCEL_PATH_SAVE)
+        path = folder + "\\" + safe_name
+
+        # 3. Сохранение в Excel
+        df = pd.DataFrame(final_data)
+        try:
+            with pd.ExcelWriter(path, engine='openpyxl') as writer:
+                df.to_excel(writer, index=False, header=False)
+                
+                ws = writer.sheets['Sheet1']
+                # Оформление: жирный шрифт для шапки и автоширина
+                for col in ws.columns:
+                    column_letter = col[0].column_letter
+                    
+                    # Делаем жирным название участка и время (первые две ячейки)
+                    ws[f"{column_letter}1"].font = Font(bold=True)
+                    ws[f"{column_letter}2"].font = Font(italic=True)
+                    
+                    # Считаем ширину по самой длинной ячейке в колонке
+                    max_length = 0
+                    for cell in col:
+                        if cell.value:
+                            max_length = max(max_length, len(str(cell.value)))
+                    ws.column_dimensions[column_letter].width = max_length + 3
+
+            QMessageBox.information(self, "Успех", f"Отчет сохранен в:\n{path}")
+
+        except PermissionError:
+            QMessageBox.critical(self, "Ошибка доступа", 
+                "Не удалось сохранить файл! Закройте этот Excel файл, если он у вас открыт, и попробуйте снова.")
+        except Exception as e:
+            QMessageBox.critical(self, "Критическая ошибка", f"Ошибка при создании Excel: {e}")
+
+
+
 
     @asyncSlot()
     async def copy_schedule_to_clipboard(self):
@@ -401,6 +500,9 @@ class MainWindow(QMainWindow):
         select_dialog = AddEmployeeDialog(all_employees_dict, current_ids, self)
         if select_dialog.exec():
             new_name, new_id = select_dialog.get_selected()
+            new_name: str = "".join(new_name.split("|")[0]).strip()
+            print("new name:", new_name)
+
             if not new_id: return
 
             # 2. Шаг: Спрашиваем, что сделать с ТЕМ, КОГО ЗАМЕНИЛИ
@@ -735,10 +837,9 @@ class MainWindow(QMainWindow):
                 if not (name and eid):
                     break
 
-                # Проверка на занятость на другом участке
-                if "📍 Занят:" in name:
-                    from PyQt6.QtWidgets import QMessageBox
+                if "Занят" in name:
                     clean_name = name.split('|')[0].strip()
+                    print('clean name:', clean_name)
                     reply = QMessageBox.question(
                         self, "Перенос сотрудника",
                         f"Сотрудник {clean_name} уже стоит на другом участке.\nПеренести сюда?",
@@ -953,6 +1054,8 @@ class MainWindow(QMainWindow):
                     
                     if select_dialog.exec():
                         new_name, new_id = select_dialog.get_selected()
+                        print(new_name.split("|"))
+                        input("stop, in edit employee")
                         
                         if new_id:
                             await self.schedule_employees_base.delete_employee_from_schedule(current_schedule['id'], emp_data['id'], current_schedule['date'])
@@ -1033,31 +1136,49 @@ class MainWindow(QMainWindow):
     @asyncSlot()
     async def open_smart_report(self):
         current = self.list_schedules.currentItem()
+        # Определяем начальную дату и ID выбранного расписания
         init_date = current.data(Qt.ItemDataRole.UserRole)['date'] if current else QDate.currentDate().toString("yyyy-MM-dd")
         init_id = current.data(Qt.ItemDataRole.UserRole)['id'] if current else -1
 
         dialog = SmartReportDialog(init_date, init_id, self)
         
-        # Цикл "Живого окна"
+        # Цикл "Живого окна" (позволяет менять дату без закрытия основного процесса)
         while True:
-            # 1. Сначала грузим данные для текущей даты в диалоге
+            # 1. Загружаем список участков для даты, установленной в диалоге
             target_date = dialog.date_edit.date().toString("yyyy-MM-dd")
             schedules = await self.schedule_base.get_schedules_by_date(target_date)
             dialog.set_schedules(schedules)
 
-            # 2. Показываем окно
+            # 2. Показываем окно и ждем нажатия кнопки
             result = dialog.exec()
 
-            if result == 888: # Код смены даты
-                continue # Просто крутим цикл дальше с новой датой
+            # --- СЦЕНАРИЙ А: Смена даты (код 888) ---
+            if result == 888:
+                continue # Возвращаемся в начало цикла и грузим данные для новой даты
+
+            # Получаем список данных по отмеченным чекбоксам
+            selected = dialog.get_selected_schedules()
             
+            # Если пользователь нажал кнопку действия, но ничего не выбрал
+            if result in (QDialog.DialogCode.Accepted, 777) and not selected:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "Внимание", "Выберите хотя бы один участок!")
+                continue # Возвращаем к выбору
+
+            # --- СЦЕНАРИЙ Б: Копирование ТЕКСТОМ (стандартный OK) ---
             if result == QDialog.DialogCode.Accepted:
-                selected = dialog.get_selected_schedules()
-                if selected:
-                    await self.build_and_copy_report(selected, target_date)
-                break # Выход
+                await self.build_and_copy_report(selected, target_date)
+                break # Выход из цикла после успешного завершения
+
+            # --- СЦЕНАРИЙ В: Экспорт в EXCEL (наш кастомный код 777) ---
+            elif result == 777:
+                # Вызываем метод формирования Excel (обсуждали выше)
+                await self.export_to_excel_side_by_side(selected)
+                break # Выход из цикла после генерации файла
             
-            break # Если нажали Отмена
+            # --- СЦЕНАРИЙ Г: Отмена или закрытие окна ---
+            break
+
 
 
 
@@ -1095,18 +1216,22 @@ class SmartReportDialog(QDialog):
         self.setWindowTitle("Генератор отчетов")
         self.resize(450, 550)
         self.initial_id = initial_id
+        self.checkboxes = []
 
         layout = QVBoxLayout(self)
+
+        # --- СЕКЦИЯ ДАТЫ ---
+        layout.addWidget(QLabel("<b>📅 Выбор даты:</b>"))
         self.date_edit = QDateEdit()
         self.date_edit.setCalendarPopup(True)
         self.date_edit.setDate(QDate.fromString(initial_date, "yyyy-MM-dd"))
-        
-        # ВАЖНО: При смене даты мы просто закрываем окно с кодом "Нужно обновить"
+        # При смене даты закрываем с кодом 888 для обновления списка в MainWindow
         self.date_edit.dateChanged.connect(lambda: self.done(888)) 
-        
-        layout.addWidget(QLabel("<b>Выбор даты:</b>"))
         layout.addWidget(self.date_edit)
 
+        layout.addWidget(QLabel("<b>🏢 Выберите участки:</b>"))
+
+        # --- СКРОЛЛ-ЗОНА С ЧЕКБОКСАМИ ---
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.container = QWidget()
@@ -1114,47 +1239,61 @@ class SmartReportDialog(QDialog):
         self.scroll.setWidget(self.container)
         layout.addWidget(self.scroll)
 
-        self.checkboxes = []
-        self.btn_copy = QPushButton("📋 Скопировать выбранное")
-        self.btn_copy.clicked.connect(self.accept)
-        layout.addWidget(self.btn_copy)
+        # --- НИЖНЯЯ ПАНЕЛЬ КНОПОК ---
+        self.btns_layout = QHBoxLayout()
+        
+        # Кнопка Текст (стандартный Accept / 1)
+        self.btn_copy_text = QPushButton("(>) Текст")
+        self.btn_copy_text.clicked.connect(self.accept)
+        
+        # Кнопка Excel (наш новый код 777)
+        self.btn_copy_excel = QPushButton("(+) Excel")
+        self.btn_copy_excel.clicked.connect(lambda: self.done(777))
+        
+        self.btn_cancel = QPushButton("Отмена")
+        self.btn_cancel.clicked.connect(self.reject)
+
+        self.btns_layout.addWidget(self.btn_copy_text)
+        self.btns_layout.addWidget(self.btn_copy_excel)
+        self.btns_layout.addWidget(self.btn_cancel)
+        
+        layout.addLayout(self.btns_layout)
 
     def set_schedules(self, schedules):
-        # 1. Полностью удаляем старый контейнер со всеми потрохами
+        """Обновляет список чекбоксов при смене даты"""
+        # Очищаем старый контейнер
         if hasattr(self, 'container'):
             self.container.deleteLater()
         
-        # 2. Создаем НОВЫЙ чистый контейнер и слой
         self.container = QWidget()
         self.scroll_layout = QVBoxLayout(self.container)
         self.checkboxes.clear()
 
-        # 3. Наполняем данными
-        for s in schedules:
-            s_dict = dict(s)
-            cb = QCheckBox(f"{s_dict['name']} ({s_dict['shift_type']})")
-            cb.schedule_data = s_dict
+        if not schedules:
+            self.scroll_layout.addWidget(QLabel("<i>Нет расписаний на эту дату</i>"))
+        else:
+            for s in schedules:
+                s_dict = dict(s)
+                # Красивое название: Участок (Смена)
+                shift_ru = "День" if s_dict['shift_type'] == "Day" else "Ночь" if s_dict['shift_type'] == "Night" else s_dict['shift_type']
+                cb = QCheckBox(f"{s_dict['name']} [{shift_ru}]")
+                cb.schedule_data = s_dict
+                
+                # Авто-выбор участка, с которого открыли окно
+                if self.initial_id != -1 and s_dict['id'] == self.initial_id:
+                    cb.setChecked(True)
+                
+                self.scroll_layout.addWidget(cb)
+                self.checkboxes.append(cb)
             
-            # Отмечаем только при первом входе
-            if self.initial_id != -1 and s_dict['id'] == self.initial_id:
-                cb.setChecked(True)
-            
-            self.scroll_layout.addWidget(cb)
-            self.checkboxes.append(cb)
-            
-        # Пружина в конце
         self.scroll_layout.addStretch()
-        
-        # 4. Устанавливаем новый контейнер в скролл-зону
         self.scroll.setWidget(self.container)
-        
-        # 5. Сбрасываем ID, чтобы на другой дате не было авто-галочек
         self.initial_id = -1 
 
-
-
     def get_selected_schedules(self):
+        """Возвращает данные только отмеченных участков"""
         return [cb.schedule_data for cb in self.checkboxes if cb.isChecked()]
+
 
 
 
@@ -1345,7 +1484,6 @@ class EmployeeManagerDialog(QDialog):
         else:
             self.history_list.addItem("История пуста")
 
-
 class AddEmployeeDialog(QDialog):
     def __init__(self, all_employees_data, current_emp_ids, parent=None):
         super().__init__(parent)
@@ -1443,6 +1581,7 @@ class AddEmployeeDialog(QDialog):
                     color = Qt.GlobalColor.white
 
             display_text = f"{short_name:<20} | {status_text}"
+            print("dt:",display_text)
             item = QListWidgetItem(display_text)
             item.setData(Qt.ItemDataRole.UserRole, user_id)
             item.setForeground(color) 
@@ -1453,15 +1592,17 @@ class AddEmployeeDialog(QDialog):
             
             self.list_widget.addItem(item)
 
-    def get_selected(self):
+    def get_selected(self) -> Union[str, int]:
         item = self.list_widget.currentItem()
         if item:
             user_id = item.data(Qt.ItemDataRole.UserRole)
             for emp in self.all_emps:
                 emp = dict(emp)
+                print(emp.items())
                 e_id = emp.get('user_id') or emp.get('id')
                 if e_id == user_id:
-                    return self.get_short_name(emp), user_id
+                    return item.text(), user_id
+                
         return None, None
 
     def quick_add_employee(self):
@@ -1732,17 +1873,20 @@ class EmployeeEditDialog(QDialog):
         }
 
 async def main_gui(db: aiosqlite.Connection):
+    try:
 
-    app = QApplication(sys.argv)
-    loop = QEventLoop(app)
-    asyncio.set_event_loop(loop)
-    
-    window = MainWindow(db)
-    window.show()
-    await window.refresh_schedules()
+        app = QApplication(sys.argv)
+        loop = QEventLoop(app)
+        asyncio.set_event_loop(loop)
+        
+        window = MainWindow(db)
+        window.show()
+        await window.refresh_schedules()
 
-    with loop:
-        await loop.run_forever()
+        with loop:
+            await loop.run_forever()
+    except Exception:
+        return
 
 if __name__ == "__main__":
     asyncio.run(main_gui())

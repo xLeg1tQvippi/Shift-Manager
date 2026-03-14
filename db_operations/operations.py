@@ -174,15 +174,12 @@ class EmployeeDatabase(DataBaseOperations):
             self.logger.error(f"Ошибка получения данных для отчета: {e}")
             return []
 
-
-
     async def fetch_all_users(self) -> list:
         try:
             cursor = await self.db.execute("SELECT * FROM employees ORDER BY last_name ASC")
             return await cursor.fetchall()
         except Exception:
             return []
-
 
 class JobBase(DataBaseOperations):
     def __init__(self, db: aiosqlite.Connection):
@@ -532,33 +529,7 @@ class ScheduleEmployeesBase(DataBaseOperations):
             await self.db.commit()
             
         except Exception as error:
-            self.logger.error(error, exc_info=True) 
-    
-    # async def delete_employee_from_schedule(self, schedule_id: int, user_id: int):
-    #     try:
-    #         await self.db.execute("""
-    #                         DELETE FROM schedule_employees WHERE schedule_id = ? AND user_id = ?
-    #                         """, (schedule_id, user_id))
-
-    #         await self.db.commit()
-            
-    #     except Exception as error:
-    #         self.logger.error(error, exc_info=True)       
-
-    # async def add_employee_to_schedule(self, schedule_id: int, user_id: int, job_place: str, start_time: str):
-    #     try:            
-    #         await self.db.execute("""
-    #                          INSERT INTO schedule_employees (schedule_id, user_id, job_place, start_time)
-    #                          VALUES (?, ?, ?, ?)
-    #                          """, (schedule_id, user_id, job_place, start_time))
-            
-    #         await self.db.commit()
-        
-    #     except Exception as error:
-    #         self.logger.error(error, exc_info=True)
-        
-    #     else:
-    #         self.logger.info("employee successfully added to schedule.")
+            self.logger.error(error, exc_info=True)
             
     async def get_all_employees_by_schedule(self, schedule_id: int) -> list:
         try:
@@ -660,11 +631,12 @@ class ScheduleBase(DataBaseOperations):
             except Exception as e:
                 self.logger.error(f"Ошибка получения расписаний со статистикой: {e}")
                 return []
-
+            
     async def get_schedules_by_date(self, target_date: str):
         try:
             cursor = await self.db.execute("""
-                SELECT s.id, s.date, d.name, s.shift_type, d.id as department_id
+                SELECT s.id, s.date, d.name, s.shift_type, d.id as department_id, 
+                    s.start_time -- <--- ДОБАВИЛИ ЭТО ПОЛЕ
                 FROM schedule s
                 JOIN departments d ON s.department_id = d.id
                 WHERE s.date = ?
@@ -674,7 +646,6 @@ class ScheduleBase(DataBaseOperations):
         except Exception as e:
             self.logger.error(f"Ошибка получения расписаний по дате: {e}")
             return []
-
 
     async def update_schedule_info(self, schedule_id: int, new_shift: str, new_time: str, date: str, department_id: int):
         try:

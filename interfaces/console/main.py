@@ -35,10 +35,6 @@ class ConsoleApp:
         self.max_department_employees: int = 0
     
     async def arrangement_menu(self):
-        # main menu of creating arrangement for schedule.
-        # 1. show arrangment (on specific date. (With word compeleter based on created already.))
-        # 2. create arrangment
-        # 3. leave.
         await self.helping_tools.clear_console()
         while True:
             try:
@@ -53,7 +49,7 @@ class ConsoleApp:
                         continue
                     result = await self.schedule_employees_ops.show_all_employees_by_schedule(schedule_id=schedule_data['id'], shift_date_start=schedule_data['date'], department_name=schedule_data['name'], shift_type=schedule_data['shift_type'])
                     pyperclip.copy(result)
-                    print('copied.')
+                    print('copied result in clipboard.')
                     
                 elif menu_chose == 2:
                     await self.arrangement_creator.menu()

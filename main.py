@@ -11,21 +11,22 @@ import json
 import dotenv, os
 
 async def main():
-    setup_logging()
-    logger = logging.getLogger(__name__)
-    db_oper = DataBaseOperations()
-    db = await db_oper.create_connection()
-    helping_tools = HelpingTools()
-    
+    try:
+        setup_logging()
+        logger = logging.getLogger(__name__)
+        db_oper = DataBaseOperations()
+        db = await db_oper.create_connection()
+        helping_tools = HelpingTools()
+        
 
-    choose_interface = await helping_tools.menu_int_handler("Выберите интерфейс:\n1 - Консоль\n2 - Приложение\n>>> ")
-    if choose_interface == 1:
-        console_app = ConsoleApp(db=db)
-        await console_app.arrangement_menu()
-    elif choose_interface == 2:
-        await main_gui(db=db)
-    
-    await db_oper.close_connection(db=db)
+        choose_interface = await helping_tools.menu_int_handler("Выберите интерфейс:\n1 - Консоль\n2 - Приложение\n>>> ")
+        if choose_interface == 1:
+            console_app = ConsoleApp(db=db)
+            await console_app.arrangement_menu()
+        elif choose_interface == 2:
+            await main_gui(db=db)
+    finally:
+        await db_oper.close_connection(db=db)
 
 
 asyncio.run(main())
