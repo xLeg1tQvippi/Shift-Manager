@@ -340,7 +340,9 @@ class MainWindow(QMainWindow):
             shift_val = "День" if s.get('shift_type') == "Day" else "Ночь" if s.get('shift_type') == "Night" else "—"
             time_val = s.get('start_time') or s.get('time') or "—"
             
-            shift_header = f"{name_val} ({shift_val})"
+            raw_date = s.get("date")
+            
+            shift_header = f"Дата: {raw_date}\n{name_val} ({shift_val})"
             time_header = f"Выход с: {time_val}"
             
             # Создаем пустые списки высотой: заголовок(1) + время(1) + макс. сотрудников
@@ -376,13 +378,14 @@ class MainWindow(QMainWindow):
 
         safe_name = re.sub(r'[/*?:"<>|]', "", base_name) + ".xlsx"
         
-        folder = str(lexicon.EXCEL_PATH_SAVE)
-        path = folder + "\\" + safe_name
+        folder = lexicon.EXCEL_PATH_SAVE
+        path = folder / safe_name
 
+        print(path)
         # 3. Сохранение в Excel
         df = pd.DataFrame(final_data)
         try:
-            with pd.ExcelWriter(path, engine='openpyxl') as writer:
+            with pd.ExcelWriter(str(path), engine='openpyxl') as writer:
                 df.to_excel(writer, index=False, header=False)
                 
                 ws = writer.sheets['Sheet1']
@@ -1575,10 +1578,10 @@ class AddEmployeeDialog(QDialog):
                         color = Qt.GlobalColor.yellow
                     except:
                         status_text = "Выходной"
-                        color = Qt.GlobalColor.white
+                        color = Qt.GlobalColor.black
                 else:
                     status_text = "Свободен"
-                    color = Qt.GlobalColor.white
+                    color = Qt.GlobalColor.black
 
             display_text = f"{short_name:<20} | {status_text}"
             print("dt:",display_text)
